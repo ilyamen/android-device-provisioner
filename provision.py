@@ -39,15 +39,28 @@ def run_cmd(cmd, check=False):
         raise RuntimeError(f"Command failed: {cmd}\nStderr: {res.stderr}")
     return res.stdout.strip(), res.stderr.strip(), res.returncode
 
-def get_devices():
+def get_devices_status():
     out, _, _ = run_cmd("adb devices")
     lines = out.splitlines()[1:]
-    devices = []
+    authorized = []
+    unauthorized = []
+    no_permissions = []
     for line in lines:
         parts = line.split()
-        if len(parts) >= 2 and parts[1] == "device":
-            devices.append(parts[0])
-    return devices
+        if len(parts) >= 2:
+            serial = parts[0]
+            status = parts[1]
+            if status == "device":
+                authorized.append(serial)
+            elif status == "unauthorized":
+                unauthorized.append(serial)
+            elif "permission" in status or "no" in status:
+                no_permissions.append(serial)
+    return authorized, unauthorized, no_permissions
+
+def get_devices():
+    authorized, _, _ = get_devices_status()
+    return authorized
 
 def get_prop(serial, prop):
     out, _, _ = run_cmd(f"adb -s {serial} shell getprop {prop}")
@@ -144,17 +157,41 @@ def main():
             break
 
     seen_devices = set()
+    notified_unauthorized = set()
+    notified_no_permissions = set()
 
     while True:
-        devices = get_devices()
-        new_devices = [d for d in devices if d not in seen_devices]
+        authorized, unauthorized, no_permissions = get_devices_status()
+
+        # Оповещение о неавторизованных устройствах
+        for serial in unauthorized:
+            if serial not in notified_unauthorized:
+                print(f"\n[!] ВНИМАНИЕ: Телефон {serial} подключен, но НЕ АВТОРИЗОВАН!")
+                print("    -> Разблокируйте экран телефона и нажмите 'Разрешить отладку с этого компьютера' (Всегда разрешать).")
+                notified_unauthorized.add(serial)
+
+        # Оповещение об ошибке прав (udev)
+        for serial in no_permissions:
+            if serial not in notified_no_permissions:
+                print(f"\n[!] ОШИБКА ДОСТУПА к устройству {serial} (no permissions)!")
+                print("    -> Проверьте udev-правила в Linux или перезапустите ADB: adb kill-server && adb start-server")
+                notified_no_permissions.add(serial)
+
+        # Очищаем статус оповещения, если устройство отключили
+        all_detected = set(authorized + unauthorized + no_permissions)
+        notified_unauthorized = {s for s in notified_unauthorized if s in all_detected}
+        notified_no_permissions = {s for s in notified_no_permissions if s in all_detected}
+
+        new_devices = [d for d in authorized if d not in seen_devices]
 
         if new_devices:
             for serial in new_devices:
                 provision_device(serial, apk_path)
                 seen_devices.add(serial)
+                notified_unauthorized.discard(serial)
+                notified_no_permissions.discard(serial)
             print("Готово. Вы можете подключить следующий телефон...")
-        elif not devices:
+        elif not authorized and not unauthorized and not no_permissions:
             print("[...] Ожидаю подключения телефона по USB (с включенной отладкой по ADB)...", end="\r", flush=True)
 
         time.sleep(2)
