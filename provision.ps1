@@ -47,7 +47,7 @@ if (-not $AdbInPath -and -not (Test-Path $LocalAdb)) {
     Write-Host "[*] ADB не обнаружен на компьютере." -ForegroundColor Yellow
     Write-Host "[*] Скачиваю официальный пакет Google Platform-Tools (ADB)..." -ForegroundColor Cyan
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls
         $zipPath = Join-Path $ScriptDir "platform-tools.zip"
         $wc = New-Object System.Net.WebClient
         $wc.DownloadFile("https://dl.google.com/android/repository/platform-tools-latest-windows.zip", $zipPath)
@@ -71,7 +71,9 @@ if (Test-Path $LocalAdb) {
 function Exec-Cmd ($cmd) {
     $proc = New-Object System.Diagnostics.ProcessStartInfo
     $proc.FileName = "cmd.exe"
-    $proc.Arguments = "/c $cmd"
+    $proc.Arguments = "/s /c `"$cmd`""
+    $proc.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $proc.StandardErrorEncoding = [System.Text.Encoding]::UTF8
     $proc.RedirectStandardOutput = $true
     $proc.RedirectStandardError = $true
     $proc.UseShellExecute = $false
@@ -191,7 +193,8 @@ function Provision-Device ($serial, $apkPath) {
     Write-Host "    [OK] Добавлен в deviceidle whitelist!" -ForegroundColor Green
 
     Write-Host "`n============================================================" -ForegroundColor Green
-    $msg = "[+++] УСТРОЙСТВО " + $serial + " (" + $manuf + " " + $model + ") ПОЛНОСТЬЮ НАСТРОЕНО!"; Write-Host $msg -ForegroundColor Green
+    $msg = "[+++] УСТРОЙСТВО " + $serial + " (" + $manuf + " " + $model + ") ПОЛНОСТЬЮ НАСТРОЕНО!"
+    Write-Host $msg -ForegroundColor Green
     Write-Host "============================================================`n" -ForegroundColor Green
     return $true
 }
@@ -206,18 +209,19 @@ if (Test-Path $ApkPath) {
     $ApkPath = $null
 }
 
-$SeenDevices = [System.Collections.Generic.HashSet[string]]::new()
-$NotifiedUnauthorized = [System.Collections.Generic.HashSet[string]]::new()
+# Используем безопасные Hashtable вместо .NET generic HashSet
+$SeenDevices = @{}
+$NotifiedUnauthorized = @{}
 
 while ($true) {
     $status = Get-DevicesStatus
 
     # Предупреждение о неавторизованных устройствах
     foreach ($ser in $status.Unauthorized) {
-        if (-not $NotifiedUnauthorized.Contains($ser)) {
+        if (-not $NotifiedUnauthorized.ContainsKey($ser)) {
             Write-Host "`n[!] ВНИМАНИЕ: Телефон $ser подключен, но НЕ АВТОРИЗОВАН!" -ForegroundColor Yellow
             Write-Host "    -> Разблокируйте экран телефона и подтвердите отладку (Всегда разрешать)." -ForegroundColor Yellow
-            $NotifiedUnauthorized.Add($ser) | Out-Null
+            $NotifiedUnauthorized[$ser] = $true
         }
     }
 
@@ -227,16 +231,26 @@ while ($true) {
         Write-Host "    -> Проверьте драйверы устройства в Диспетчере устройств Windows." -ForegroundColor Red
     }
 
-    # Очищаем статусы оповещения, если устройство отключили
-    $allCurrent = $status.Authorized + $status.Unauthorized + $status.NoPermissions
-    $NotifiedUnauthorized.RemoveWhere({ -not ($allCurrent -contains $_) }) | Out-Null
+    # Очищаем статусы оповещения для устройств, которые отключили
+    $currentUnauth = @($status.Unauthorized)
+    $keysToClear = @()
+    foreach ($k in $NotifiedUnauthorized.Keys) {
+        if ($currentUnauth -notcontains $k) {
+            $keysToClear += $k
+        }
+    }
+    foreach ($k in $keysToClear) {
+        $NotifiedUnauthorized.Remove($k)
+    }
 
     # Настраиваем новые авторизованные устройства
     foreach ($ser in $status.Authorized) {
-        if (-not $SeenDevices.Contains($ser)) {
+        if (-not $SeenDevices.ContainsKey($ser)) {
             Provision-Device $ser $ApkPath
-            $SeenDevices.Add($ser) | Out-Null
-            $NotifiedUnauthorized.Remove($ser) | Out-Null
+            $SeenDevices[$ser] = $true
+            if ($NotifiedUnauthorized.ContainsKey($ser)) {
+                $NotifiedUnauthorized.Remove($ser)
+            }
             Write-Host "Готово! Вы можете отключить этот телефон и подключить следующий...`n" -ForegroundColor Cyan
         }
     }

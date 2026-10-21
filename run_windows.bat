@@ -1,5 +1,6 @@
 @echo off
 cd /d "%~dp0"
-title Автоматическая настройка телефонов (Provisioner)
+title Auto-Provisioner (com.gadgets.auto)
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0provision.ps1"
-if %ERRORLEVEL% NEQ 0 pause
+echo.
+pause
