@@ -28,6 +28,46 @@ $RuntimePermissions = @(
     "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
 )
 
+Clear-Host
+Write-Host "============================================================" -ForegroundColor Green
+Write-Host "      Android Auto-Provisioner for $PackageName" -ForegroundColor Green
+Write-Host "      Настройка чтения банковских пушей и SMS (Android 14-16)" -ForegroundColor Green
+Write-Host "============================================================`n" -ForegroundColor Green
+
+# 1. Определение рабочей папки
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $ScriptDir) { $ScriptDir = $PSScriptRoot }
+if (-not $ScriptDir) { $ScriptDir = (Get-Location).Path }
+
+# 2. Проверка и автоматическое скачивание ADB
+$AdbInPath = Get-Command adb -ErrorAction SilentlyContinue
+$LocalAdb = Join-Path $ScriptDir "platform-tools\adb.exe"
+
+if (-not $AdbInPath -and -not (Test-Path $LocalAdb)) {
+    Write-Host "[*] ADB не обнаружен на компьютере." -ForegroundColor Yellow
+    Write-Host "[*] Скачиваю официальный пакет Google Platform-Tools (ADB)..." -ForegroundColor Cyan
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $zipPath = Join-Path $ScriptDir "platform-tools.zip"
+        $wc = New-Object System.Net.WebClient
+        $wc.DownloadFile("https://dl.google.com/android/repository/platform-tools-latest-windows.zip", $zipPath)
+        Write-Host "[*] Распаковка архива..." -ForegroundColor Cyan
+        Expand-Archive -Path $zipPath -DestinationPath $ScriptDir -Force
+        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+        Write-Host "[OK] ADB успешно установлен локально!`n" -ForegroundColor Green
+    } catch {
+        Write-Host "[!] Ошибка загрузки ADB: $_" -ForegroundColor Red
+        Write-Host "Проверьте подключение к интернету и перезапустите скрипт."
+        Read-Host "Нажмите Enter для выхода..."
+        exit 1
+    }
+}
+
+if (Test-Path $LocalAdb) {
+    $toolsDir = Join-Path $ScriptDir "platform-tools"
+    $env:PATH = "$toolsDir;$env:PATH"
+}
+
 function Exec-Cmd ($cmd) {
     $proc = New-Object System.Diagnostics.ProcessStartInfo
     $proc.FileName = "cmd.exe"
@@ -50,7 +90,7 @@ function Exec-Cmd ($cmd) {
 
 function Get-DevicesStatus {
     $res = Exec-Cmd "adb devices"
-    $lines = $res.Stdout -split "`r?`n"
+    $lines = $res.Stdout -split "`r?\n"
     $authorized = @()
     $unauthorized = @()
     $noPermissions = @()
@@ -120,7 +160,6 @@ function Provision-Device ($serial, $apkPath) {
     if ($appop.Stdout -match "allow") {
         Write-Host "    [OK] RECEIVE_SENSITIVE_NOTIFICATIONS -> ALLOW" -ForegroundColor Green
     } else {
-        # Если Android 13/14, этот статус будет пустым или default - это норма
         Write-Host "    [i] Статус: $($appop.Stdout) (для Android 14 и старее это норма)" -ForegroundColor DarkGray
     }
 
@@ -157,14 +196,6 @@ function Provision-Device ($serial, $apkPath) {
     return $true
 }
 
-# MAIN
-Clear-Host
-Write-Host "============================================================" -ForegroundColor Green
-Write-Host "      Android Auto-Provisioner for $PackageName" -ForegroundColor Green
-Write-Host "      Настройка чтения банковских пушей и SMS (Android 14-16)" -ForegroundColor Green
-Write-Host "============================================================`n" -ForegroundColor Green
-
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ApkPath = Join-Path $ScriptDir $DefaultApk
 if (-not (Test-Path $ApkPath)) {
     $ApkPath = Join-Path $ScriptDir "app.apk"
