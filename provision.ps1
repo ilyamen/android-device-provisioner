@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #   Android Auto-Provisioner for com.gadgets.auto (Windows PS)
 #   Настройка чтения банковских пушей и SMS (Android 14-16)
 # ============================================================
@@ -171,7 +171,7 @@ function Provision-Device ($serial, $apkPath) {
         Write-Host "    [OK] NotificationListenerService включен в системе!" -ForegroundColor Green
     } else {
         $curr = if ($listeners.Stdout -ne "null") { $listeners.Stdout } else { "" }
-        $newListeners = "$curr:$NotificationService".Trim(":")
+        $newListeners = ($curr + ":" + $NotificationService).Trim(":")
         Exec-Cmd "adb -s $serial shell settings put secure enabled_notification_listeners `"$newListeners`"" | Out-Null
         Write-Host "    [OK] Прописан напрямую через settings secure." -ForegroundColor Green
     }
@@ -191,7 +191,7 @@ function Provision-Device ($serial, $apkPath) {
     Write-Host "    [OK] Добавлен в deviceidle whitelist!" -ForegroundColor Green
 
     Write-Host "`n============================================================" -ForegroundColor Green
-    Write-Host "[+++] УСТРОЙСТВО $serial ($manuf $model) ПОЛНОСТЬЮ НАСТРОЕНО!" -ForegroundColor Green
+    $msg = "[+++] УСТРОЙСТВО " + $serial + " (" + $manuf + " " + $model + ") ПОЛНОСТЬЮ НАСТРОЕНО!"; Write-Host $msg -ForegroundColor Green
     Write-Host "============================================================`n" -ForegroundColor Green
     return $true
 }
@@ -216,7 +216,7 @@ while ($true) {
     foreach ($ser in $status.Unauthorized) {
         if (-not $NotifiedUnauthorized.Contains($ser)) {
             Write-Host "`n[!] ВНИМАНИЕ: Телефон $ser подключен, но НЕ АВТОРИЗОВАН!" -ForegroundColor Yellow
-            Write-Host "    -> Разблокируйте экран телефона и нажмите 'Разрешить отладку с этого компьютера' (Всегда разрешать)." -ForegroundColor Yellow
+            Write-Host "    -> Разблокируйте экран телефона и подтвердите отладку (Всегда разрешать)." -ForegroundColor Yellow
             $NotifiedUnauthorized.Add($ser) | Out-Null
         }
     }
