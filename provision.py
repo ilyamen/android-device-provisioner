@@ -76,10 +76,18 @@ def provision_device(serial, apk_path=None):
     print(f"[*] Модель: {brand} {model} | Android {android_ver}")
     print(f"{'='*60}")
 
-    # 1. Проверяем установлено ли приложение
+    # 1. Проверяем установлено ли приложение и его версию
     out, _, _ = run_cmd(f"adb -s {serial} shell pm path {PACKAGE_NAME}")
-    if not out:
-        print(f"[-] Приложение {PACKAGE_NAME} НЕ установлено.")
+    if out and "package:" in out:
+        dump, _, _ = run_cmd(f"adb -s {serial} shell dumpsys package {PACKAGE_NAME}")
+        m_name = re.search(r"versionName=([^\s]+)", dump)
+        m_code = re.search(r"versionCode=([0-9]+)", dump)
+        v_str = f"v{m_name.group(1)}" if m_name else ""
+        c_str = f"(код {m_code.group(1)})" if m_code else ""
+        print(f"[OK] Приложение {PACKAGE_NAME} уже установлено {v_str} {c_str}.")
+        print("     Установка не требуется. Текущая установленная версия полностью сохранена!")
+    else:
+        print(f"[-] Приложение {PACKAGE_NAME} НЕ установлено на телефоне.")
         if apk_path and os.path.exists(apk_path):
             print(f"[+] Устанавливаю {apk_path} ...")
             out_inst, err_inst, code = run_cmd(f"adb -s {serial} install -r -g \"{apk_path}\"")
@@ -90,8 +98,6 @@ def provision_device(serial, apk_path=None):
                 return False
         else:
             print("    [!] APK-файл не найден рядом со скриптом. Установите приложение вручную или положите APK в папку со скриптом.")
-    else:
-        print(f"[OK] Приложение {PACKAGE_NAME} уже установлено.")
 
     # 2. Выдаем RECEIVE_SENSITIVE_NOTIFICATIONS (защита Android 15/16)
     print("\n[1/4] Разблокировка чувствительных пуш-уведомлений (Android 15/16)...")

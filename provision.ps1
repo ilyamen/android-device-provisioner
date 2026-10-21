@@ -135,10 +135,20 @@ function Provision-Device ($serial, $apkPath) {
     Write-Host "[*] Модель: $manuf $model | Android $ver" -ForegroundColor White
     Write-Host "============================================================" -ForegroundColor Cyan
 
-    # 1. Проверяем установлено ли приложение
+    # 1. Проверяем установлено ли приложение и его версию
     $checkApp = Exec-Cmd "adb -s $serial shell pm path $PackageName"
-    if ($checkApp.Stdout -notmatch "package:") {
-        Write-Host "[-] Приложение $PackageName НЕ установлено." -ForegroundColor Yellow
+    if ($checkApp.Stdout -match "package:") {
+        # Приложение УЖЕ установлено - НИ В КОЕМ СЛУЧАЕ не перезаписываем и не понижаем версию
+        $dump = Exec-Cmd "adb -s $serial shell dumpsys package $PackageName"
+        $verName = ""
+        $verCode = ""
+        if ($dump.Stdout -match "versionName=([^\s]+)") { $verName = "v" + $matches[1] }
+        if ($dump.Stdout -match "versionCode=([0-9]+)") { $verCode = "(код " + $matches[1] + ")" }
+        Write-Host "[OK] Приложение $PackageName уже установлено $verName $verCode." -ForegroundColor Green
+        Write-Host "     Установка не требуется. Текущая установленная версия полностью сохранена!" -ForegroundColor DarkGray
+    } else {
+        # Приложения нет на телефоне - только тогда ставим
+        Write-Host "[-] Приложение $PackageName НЕ установлено на телефоне." -ForegroundColor Yellow
         if ($apkPath -and (Test-Path $apkPath)) {
             Write-Host "[+] Устанавливаю $apkPath ..." -ForegroundColor Cyan
             $inst = Exec-Cmd "adb -s $serial install -r -g `"$apkPath`""
@@ -151,8 +161,6 @@ function Provision-Device ($serial, $apkPath) {
         } else {
             Write-Host "    [!] APK-файл не найден рядом со скриптом." -ForegroundColor Red
         }
-    } else {
-        Write-Host "[OK] Приложение $PackageName уже установлено." -ForegroundColor Green
     }
 
     # 2. Выдаем RECEIVE_SENSITIVE_NOTIFICATIONS (защита Android 15/16)
