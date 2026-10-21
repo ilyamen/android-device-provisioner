@@ -185,7 +185,18 @@ function Provision-Device ($serial, $apkPath) {
         $res = Exec-Cmd "adb -s $serial shell pm grant $PackageName $perm"
         if ($res.ExitCode -eq 0) { $granted++ }
     }
-    Write-Host "    [OK] Проверено и выдано $granted/$($RuntimePermissions.Count) разрешений." -ForegroundColor Green
+    if ($granted -gt 0) {
+        Write-Host "    [OK] Выдано $granted/$($RuntimePermissions.Count) разрешений." -ForegroundColor Green
+    } else {
+        $dump = Exec-Cmd "adb -s $serial shell dumpsys package $PackageName"
+        if ($dump.Stdout -match "android.permission.READ_SMS: granted=true") {
+            Write-Host "    [OK] Все основные разрешения (SMS, память) уже активны!" -ForegroundColor Green
+        } elseif ($manuf -match "Xiaomi|Redmi|POCO") {
+            Write-Host "    [!] Для Xiaomi: включите Настройки безопасности в меню разработчика или выдайте права вручную." -ForegroundColor Yellow
+        } else {
+            Write-Host "    [OK] Проверено $granted/$($RuntimePermissions.Count) разрешений." -ForegroundColor Green
+        }
+    }
 
     # 5. Исключение из экономии батареи (Doze mode)
     Write-Host "`n[4/4] Исключение из энергосбережения батареи (фоновая работа)..." -ForegroundColor Cyan
@@ -246,7 +257,7 @@ while ($true) {
     # Настраиваем новые авторизованные устройства
     foreach ($ser in $status.Authorized) {
         if (-not $SeenDevices.ContainsKey($ser)) {
-            Provision-Device $ser $ApkPath
+            $null = Provision-Device $ser $ApkPath
             $SeenDevices[$ser] = $true
             if ($NotifiedUnauthorized.ContainsKey($ser)) {
                 $NotifiedUnauthorized.Remove($ser)
