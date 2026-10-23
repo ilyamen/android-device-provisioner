@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 #   Android Auto-Provisioner for com.gadgets.auto (Windows PS)
 #   Настройка чтения банковских пушей и SMS (Android 14-16)
 # ============================================================
@@ -125,6 +125,99 @@ function Get-DeviceProp ($serial, $prop) {
     return $res.Stdout
 }
 
+function Get-TetherIp ($serial) {
+    $res = Exec-Cmd "adb -s $serial shell `"ip -o -4 addr show`""
+    $lines = $res.Stdout -split "`r?\n"
+    foreach ($line in $lines) {
+        if ($line -match "\s+(rndis|usb|eth)\w*\s+inet\s+([0-9\.]+)\/") {
+            return $matches[2]
+        }
+    }
+    return $null
+}
+
+function Apply-Device-Settings ($targetSerial) {
+    $isBlocked = $false
+
+    # 1. Выдаем RECEIVE_SENSITIVE_NOTIFICATIONS (защита Android 15/16)
+    Write-Host "`n[1/5] Разблокировка чувствительных пуш-уведомлений (Android 15/16)..." -ForegroundColor Cyan
+    $appopRes = Exec-Cmd "adb -s $targetSerial shell cmd appops set --user 0 $PackageName RECEIVE_SENSITIVE_NOTIFICATIONS allow"
+    $appop = Exec-Cmd "adb -s $targetSerial shell cmd appops get --user 0 $PackageName RECEIVE_SENSITIVE_NOTIFICATIONS"
+    if ($appop.Stdout -match "allow") {
+        Write-Host "    [OK] RECEIVE_SENSITIVE_NOTIFICATIONS -> ALLOW" -ForegroundColor Green
+    } else {
+        Write-Host "    [i] Статус: $($appop.Stdout) (для Android 14 и старее это норма)" -ForegroundColor DarkGray
+    }
+
+    # 2. Активируем слушатель уведомлений
+    Write-Host "`n[2/5] Активация системного сервиса чтения уведомлений..." -ForegroundColor Cyan
+    Exec-Cmd "adb -s $targetSerial shell cmd notification allow_listener $NotificationService 0" | Out-Null
+    $listeners = Exec-Cmd "adb -s $targetSerial shell settings get secure enabled_notification_listeners"
+    if ($listeners.Stdout -match [regex]::Escape($PackageName)) {
+        Write-Host "    [OK] NotificationListenerService включен в системе!" -ForegroundColor Green
+    } else {
+        $curr = if ($listeners.Stdout -ne "null") { $listeners.Stdout } else { "" }
+        $newListeners = ($curr + ":" + $NotificationService).Trim(":")
+        $setRes = Exec-Cmd "adb -s $targetSerial shell settings put secure enabled_notification_listeners `"$newListeners`""
+        if ($setRes.Stderr -match "SecurityException|Permission denial") {
+            $isBlocked = $true
+        } else {
+            Write-Host "    [OK] Прописан напрямую через settings secure." -ForegroundColor Green
+        }
+    }
+
+    # 3. Выдаем runtime permissions
+    Write-Host "`n[3/5] Выдача всех системных runtime-разрешений (SMS, телефон, память)..." -ForegroundColor Cyan
+    $granted = 0
+    $permDenied = $false
+    foreach ($perm in $RuntimePermissions) {
+        $res = Exec-Cmd "adb -s $targetSerial shell pm grant $PackageName $perm"
+        if ($res.ExitCode -eq 0) {
+            $granted++
+        } elseif ($res.Stderr -match "SecurityException|Permission denial|not allowed to grant") {
+            $permDenied = $true
+        }
+    }
+    if ($granted -gt 0) {
+        Write-Host "    [OK] Выдано $granted/$($RuntimePermissions.Count) разрешений." -ForegroundColor Green
+    } else {
+        $dump = Exec-Cmd "adb -s $targetSerial shell dumpsys package $PackageName"
+        if ($dump.Stdout -match "android.permission.READ_SMS: granted=true") {
+            Write-Host "    [OK] Все основные разрешения (SMS, память) уже активны!" -ForegroundColor Green
+        } else {
+            if ($permDenied) { $isBlocked = $true }
+            Write-Host "    [!] Разрешения не применились по USB." -ForegroundColor Yellow
+        }
+    }
+
+    # 4. Исключение из экономии батареи (Doze mode)
+    Write-Host "`n[4/5] Исключение из энергосбережения батареи (фоновая работа)..." -ForegroundColor Cyan
+    Exec-Cmd "adb -s $targetSerial shell dumpsys deviceidle whitelist +$PackageName" | Out-Null
+    Write-Host "    [OK] Добавлен в deviceidle whitelist!" -ForegroundColor Green
+
+    # 5. Фикс режима полёта (чтобы Wi-Fi не гас при отключении мобильной связи)
+    Write-Host "`n[5/5] Защита от разлогина: настройка режима полёта (Wi-Fi не гаснет)..." -ForegroundColor Cyan
+    $radRes = Exec-Cmd "adb -s $targetSerial shell settings put global airplane_mode_radios cell,bluetooth,nfc,wimax"
+    Exec-Cmd "adb -s $targetSerial shell settings put global airplane_mode_toggleable_radios wifi,bluetooth" | Out-Null
+    if ($radRes.Stderr -match "SecurityException|Permission denial") {
+        $isBlocked = $true
+        Write-Host "    [!] Запись global settings заблокирована системой." -ForegroundColor Yellow
+    } else {
+        $radCheck = Exec-Cmd "adb -s $targetSerial shell settings get global airplane_mode_radios"
+        if ($radCheck.Stdout -and $radCheck.Stdout -notmatch "wifi") {
+            Write-Host "    [OK] airplane_mode_radios -> Wi-Fi защищён от отключения в авиарежиме!" -ForegroundColor Green
+        } else {
+            $isBlocked = $true
+            Write-Host "    [!] airplane_mode_radios не изменился (блокировка USB)." -ForegroundColor Yellow
+        }
+    }
+
+    return @{
+        IsBlocked = $isBlocked
+        Granted = $granted
+    }
+}
+
 function Provision-Device ($serial, $apkPath) {
     Write-Host "`n============================================================" -ForegroundColor Cyan
     Write-Host "[*] НАЧИНАЮ НАСТРОЙКУ УСТРОЙСТВА: $serial" -ForegroundColor Cyan
@@ -163,57 +256,62 @@ function Provision-Device ($serial, $apkPath) {
         }
     }
 
-    # 2. Выдаем RECEIVE_SENSITIVE_NOTIFICATIONS (защита Android 15/16)
-    Write-Host "`n[1/4] Разблокировка чувствительных пуш-уведомлений (Android 15/16)..." -ForegroundColor Cyan
-    Exec-Cmd "adb -s $serial shell cmd appops set --user 0 $PackageName RECEIVE_SENSITIVE_NOTIFICATIONS allow" | Out-Null
-    $appop = Exec-Cmd "adb -s $serial shell cmd appops get --user 0 $PackageName RECEIVE_SENSITIVE_NOTIFICATIONS"
-    if ($appop.Stdout -match "allow") {
-        Write-Host "    [OK] RECEIVE_SENSITIVE_NOTIFICATIONS -> ALLOW" -ForegroundColor Green
-    } else {
-        Write-Host "    [i] Статус: $($appop.Stdout) (для Android 14 и старее это норма)" -ForegroundColor DarkGray
-    }
+    # 2. Применяем настройки по обычному USB
+    $res = Apply-Device-Settings $serial
 
-    # 3. Активируем слушатель уведомлений
-    Write-Host "`n[2/4] Активация системного сервиса чтения уведомлений..." -ForegroundColor Cyan
-    Exec-Cmd "adb -s $serial shell cmd notification allow_listener $NotificationService 0" | Out-Null
-    $listeners = Exec-Cmd "adb -s $serial shell settings get secure enabled_notification_listeners"
-    if ($listeners.Stdout -match [regex]::Escape($PackageName)) {
-        Write-Host "    [OK] NotificationListenerService включен в системе!" -ForegroundColor Green
-    } else {
-        $curr = if ($listeners.Stdout -ne "null") { $listeners.Stdout } else { "" }
-        $newListeners = ($curr + ":" + $NotificationService).Trim(":")
-        Exec-Cmd "adb -s $serial shell settings put secure enabled_notification_listeners `"$newListeners`"" | Out-Null
-        Write-Host "    [OK] Прописан напрямую через settings secure." -ForegroundColor Green
-    }
+    # 3. Если сработала защита Xiaomi (Security Settings Block) - обходим через USB-модем
+    if ($res.IsBlocked) {
+        Write-Host "`n============================================================" -ForegroundColor Yellow
+        Write-Host "[!] ВНИМАНИЕ: Сработала защита Xiaomi/HyperOS от изменений по USB." -ForegroundColor Yellow
+        Write-Host "    Для завершения настройки включите режим «USB-модем»:" -ForegroundColor White
+        Write-Host "    1. На телефоне смахните шторку уведомлений сверху вниз." -ForegroundColor Cyan
+        Write-Host "    2. Нажмите на уведомление «Зарядка через USB» (Режим USB)." -ForegroundColor Cyan
+        Write-Host "    3. Выберите пункт «USB-модем» (USB tethering)." -ForegroundColor Cyan
+        Write-Host "============================================================" -ForegroundColor Yellow
+        Write-Host "[*] Ожидаю включения USB-модема на телефоне (до 60 секунд)..." -ForegroundColor DarkGray
 
-    # 4. Выдаем runtime permissions
-    Write-Host "`n[3/4] Выдача всех системных runtime-разрешений (SMS, телефон, память)..." -ForegroundColor Cyan
-    $granted = 0
-    foreach ($perm in $RuntimePermissions) {
-        $res = Exec-Cmd "adb -s $serial shell pm grant $PackageName $perm"
-        if ($res.ExitCode -eq 0) { $granted++ }
-    }
-    if ($granted -gt 0) {
-        Write-Host "    [OK] Выдано $granted/$($RuntimePermissions.Count) разрешений." -ForegroundColor Green
-    } else {
-        $dump = Exec-Cmd "adb -s $serial shell dumpsys package $PackageName"
-        if ($dump.Stdout -match "android.permission.READ_SMS: granted=true") {
-            Write-Host "    [OK] Все основные разрешения (SMS, память) уже активны!" -ForegroundColor Green
-        } elseif ($manuf -match "Xiaomi|Redmi|POCO") {
-            Write-Host "    [!] Для Xiaomi: включите Настройки безопасности в меню разработчика или выдайте права вручную." -ForegroundColor Yellow
+        $tetherIp = $null
+        for ($wait = 0; $wait -lt 30; $wait++) {
+            Start-Sleep -Seconds 2
+            $currDevices = Get-DevicesStatus
+            if ($currDevices.Authorized -contains $serial) {
+                $tetherIp = Get-TetherIp $serial
+                if ($tetherIp) { break }
+            } else {
+                foreach ($d in $currDevices.Authorized) {
+                    $tetherIp = Get-TetherIp $d
+                    if ($tetherIp) { $serial = $d; break }
+                }
+                if ($tetherIp) { break }
+            }
+        }
+
+        if ($tetherIp) {
+            Write-Host "`n[+] USB-модем активен! Прямой IP: $tetherIp" -ForegroundColor Green
+            Write-Host "[*] Переключаю ADB на защищённый сетевой канал..." -ForegroundColor Cyan
+            Exec-Cmd "adb -s $serial tcpip 5555" | Out-Null
+            Start-Sleep -Seconds 2
+            $tcpTarget = "$tetherIp:5555"
+            $connRes = Exec-Cmd "adb connect $tcpTarget"
+            if ($connRes.Stdout -match "connected") {
+                Write-Host "[OK] Подключено к $tcpTarget! Повторно применяю настройки..." -ForegroundColor Green
+                $null = Apply-Device-Settings $tcpTarget
+                Exec-Cmd "adb disconnect $tcpTarget" | Out-Null
+                Write-Host "[OK] Настройки успешно применены через канал USB-модема!" -ForegroundColor Green
+            } else {
+                Write-Host "[!] Не удалось подключиться к $tcpTarget: $($connRes.Stdout)" -ForegroundColor Red
+            }
         } else {
-            Write-Host "    [OK] Проверено $granted/$($RuntimePermissions.Count) разрешений." -ForegroundColor Green
+            Write-Host "`n[!] Время ожидания USB-модема истекло." -ForegroundColor Yellow
+            Write-Host "    Выдайте права вручную в настройках телефона или включите «Настройки безопасности» в меню разработчика." -ForegroundColor DarkGray
         }
     }
-
-    # 5. Исключение из экономии батареи (Doze mode)
-    Write-Host "`n[4/4] Исключение из энергосбережения батареи (фоновая работа)..." -ForegroundColor Cyan
-    Exec-Cmd "adb -s $serial shell dumpsys deviceidle whitelist +$PackageName" | Out-Null
-    Write-Host "    [OK] Добавлен в deviceidle whitelist!" -ForegroundColor Green
 
     Write-Host "`n============================================================" -ForegroundColor Green
     $msg = "[+++] УСТРОЙСТВО " + $serial + " (" + $manuf + " " + $model + ") ПОЛНОСТЬЮ НАСТРОЕНО!"
     Write-Host $msg -ForegroundColor Green
+    Write-Host "[i] Для применения защиты от разлогина (сохранение Wi-Fi в авиарежиме)" -ForegroundColor Cyan
+    Write-Host "    рекомендуется перезагрузить телефон [adb reboot]." -ForegroundColor Cyan
     Write-Host "============================================================`n" -ForegroundColor Green
     return $true
 }

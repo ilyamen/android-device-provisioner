@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 import os
+import re
 
 PACKAGE_NAME = "com.gadgets.auto"
 NOTIFICATION_SERVICE = "com.gadgets.auto/com.gadgets.auto.util.network.NotificationService"
@@ -66,6 +67,84 @@ def get_prop(serial, prop):
     out, _, _ = run_cmd(f"adb -s {serial} shell getprop {prop}")
     return out
 
+def get_tether_ip(serial):
+    out, _, _ = run_cmd(f"adb -s {serial} shell \"ip -o -4 addr show\"")
+    for line in out.splitlines():
+        m = re.search(r"\s+(?:rndis|usb|eth)\w*\s+inet\s+([0-9\.]+)/", line)
+        if m:
+            return m.group(1)
+    return None
+
+def apply_device_settings(target_serial):
+    is_blocked = False
+
+    # 1. Выдаем RECEIVE_SENSITIVE_NOTIFICATIONS (защита Android 15/16)
+    print("\n[1/5] Разблокировка чувствительных пуш-уведомлений (Android 15/16)...")
+    run_cmd(f"adb -s {target_serial} shell cmd appops set --user 0 {PACKAGE_NAME} RECEIVE_SENSITIVE_NOTIFICATIONS allow")
+    appop_status, _, _ = run_cmd(f"adb -s {target_serial} shell cmd appops get --user 0 {PACKAGE_NAME} RECEIVE_SENSITIVE_NOTIFICATIONS")
+    if "allow" in appop_status:
+        print(f"    [OK] RECEIVE_SENSITIVE_NOTIFICATIONS -> ALLOW")
+    else:
+        print(f"    [i] Статус: {appop_status} (для Android 14 и старее это норма)")
+
+    # 2. Активируем слушатель уведомлений
+    print("\n[2/5] Активация системного сервиса чтения уведомлений...")
+    run_cmd(f"adb -s {target_serial} shell cmd notification allow_listener {NOTIFICATION_SERVICE} 0")
+    listeners, err, _ = run_cmd(f"adb -s {target_serial} shell settings get secure enabled_notification_listeners")
+    if PACKAGE_NAME in listeners:
+        print(f"    [OK] NotificationListenerService включен в системе!")
+    else:
+        curr = listeners if listeners != "null" else ""
+        new_listeners = f"{curr}:{NOTIFICATION_SERVICE}".strip(":")
+        _, set_err, _ = run_cmd(f"adb -s {target_serial} shell settings put secure enabled_notification_listeners \"{new_listeners}\"")
+        if "SecurityException" in set_err or "Permission denial" in set_err:
+            is_blocked = True
+        else:
+            print(f"    [OK] Прописан напрямую через settings secure.")
+
+    # 3. Выдаем runtime permissions
+    print("\n[3/5] Выдача всех системных runtime-разрешений (SMS, телефон, память)...")
+    granted_count = 0
+    perm_denied = False
+    for perm in RUNTIME_PERMISSIONS:
+        _, p_err, code = run_cmd(f"adb -s {target_serial} shell pm grant {PACKAGE_NAME} {perm}")
+        if code == 0:
+            granted_count += 1
+        elif "SecurityException" in p_err or "Permission denial" in p_err or "not allowed to grant" in p_err:
+            perm_denied = True
+    if granted_count > 0:
+        print(f"    [OK] Выдано {granted_count}/{len(RUNTIME_PERMISSIONS)} разрешений.")
+    else:
+        dump, _, _ = run_cmd(f"adb -s {target_serial} shell dumpsys package {PACKAGE_NAME}")
+        if "android.permission.READ_SMS: granted=true" in dump:
+            print("    [OK] Все основные разрешения (SMS, память) уже активны!")
+        else:
+            if perm_denied:
+                is_blocked = True
+            print("    [!] Разрешения не применились по USB.")
+
+    # 4. Исключение из экономии батареи (Doze mode)
+    print("\n[4/5] Исключение из энергосбережения батареи (фоновая работа)...")
+    run_cmd(f"adb -s {target_serial} shell dumpsys deviceidle whitelist +{PACKAGE_NAME}")
+    print(f"    [OK] Добавлен в deviceidle whitelist!")
+
+    # 5. Фикс режима полёта (защита от сброса сессии при отсутствии мобильной сети)
+    print("\n[5/5] Защита от разлогина: настройка режима полёта (Wi-Fi не гаснет)...")
+    _, rad_err, _ = run_cmd(f"adb -s {target_serial} shell settings put global airplane_mode_radios cell,bluetooth,nfc,wimax")
+    run_cmd(f"adb -s {target_serial} shell settings put global airplane_mode_toggleable_radios wifi,bluetooth")
+    if "SecurityException" in rad_err or "Permission denial" in rad_err:
+        is_blocked = True
+        print("    [!] Запись global settings заблокирована системой.")
+    else:
+        rad_check, _, _ = run_cmd(f"adb -s {target_serial} shell settings get global airplane_mode_radios")
+        if rad_check and "wifi" not in rad_check:
+            print("    [OK] airplane_mode_radios -> Wi-Fi защищён от отключения в авиарежиме!")
+        else:
+            is_blocked = True
+            print("    [!] airplane_mode_radios не изменился (блокировка USB).")
+
+    return is_blocked
+
 def provision_device(serial, apk_path=None):
     print(f"\n{'='*60}")
     print(f"[*] НАЧИНАЮ НАСТРОЙКУ УСТРОЙСТВА: {serial}")
@@ -99,44 +178,59 @@ def provision_device(serial, apk_path=None):
         else:
             print("    [!] APK-файл не найден рядом со скриптом. Установите приложение вручную или положите APK в папку со скриптом.")
 
-    # 2. Выдаем RECEIVE_SENSITIVE_NOTIFICATIONS (защита Android 15/16)
-    print("\n[1/4] Разблокировка чувствительных пуш-уведомлений (Android 15/16)...")
-    run_cmd(f"adb -s {serial} shell cmd appops set --user 0 {PACKAGE_NAME} RECEIVE_SENSITIVE_NOTIFICATIONS allow")
-    appop_status, _, _ = run_cmd(f"adb -s {serial} shell cmd appops get --user 0 {PACKAGE_NAME} RECEIVE_SENSITIVE_NOTIFICATIONS")
-    if "allow" in appop_status:
-        print(f"    [OK] RECEIVE_SENSITIVE_NOTIFICATIONS -> ALLOW")
-    else:
-        print(f"    [!] Статус: {appop_status}")
+    # 2. Применяем настройки по обычному USB
+    is_blocked = apply_device_settings(serial)
 
-    # 3. Активируем слушатель уведомлений
-    print("\n[2/4] Активация системного сервиса чтения уведомлений...")
-    run_cmd(f"adb -s {serial} shell cmd notification allow_listener {NOTIFICATION_SERVICE} 0")
-    listeners, _, _ = run_cmd(f"adb -s {serial} shell settings get secure enabled_notification_listeners")
-    if PACKAGE_NAME in listeners:
-        print(f"    [OK] NotificationListenerService включен в системе!")
-    else:
-        # Fallback добавление в settings secure
-        curr = listeners if listeners != "null" else ""
-        new_listeners = f"{curr}:{NOTIFICATION_SERVICE}".strip(":")
-        run_cmd(f"adb -s {serial} shell settings put secure enabled_notification_listeners \"{new_listeners}\"")
-        print(f"    [OK] Прописан напрямую через settings secure.")
+    # 3. Если сработала защита Xiaomi (Security Settings Block) - обходим через USB-модем
+    if is_blocked:
+        print(f"\n{'='*60}")
+        print("[!] ВНИМАНИЕ: Сработала защита Xiaomi/HyperOS от изменений по USB.")
+        print("    Для завершения настройки включите режим «USB-модем»:")
+        print("    1. На телефоне смахните шторку уведомлений сверху вниз.")
+        print("    2. Нажмите на уведомление «Зарядка через USB» (Режим USB).")
+        print("    3. Выберите пункт «USB-модем» (USB tethering).")
+        print(f"{'='*60}")
+        print("[*] Ожидаю включения USB-модема на телефоне (до 60 секунд)...")
 
-    # 4. Выдаем runtime permissions
-    print("\n[3/4] Выдача всех системных runtime-разрешений (SMS, телефон, память)...")
-    granted_count = 0
-    for perm in RUNTIME_PERMISSIONS:
-        _, _, code = run_cmd(f"adb -s {serial} shell pm grant {PACKAGE_NAME} {perm}")
-        if code == 0:
-            granted_count += 1
-    print(f"    [OK] Проверено и выдано {granted_count}/{len(RUNTIME_PERMISSIONS)} разрешений.")
+        tether_ip = None
+        for _ in range(30):
+            time.sleep(2)
+            auth_devs = get_devices()
+            if serial in auth_devs:
+                tether_ip = get_tether_ip(serial)
+                if tether_ip:
+                    break
+            else:
+                for d in auth_devs:
+                    tether_ip = get_tether_ip(d)
+                    if tether_ip:
+                        serial = d
+                        break
+                if tether_ip:
+                    break
 
-    # 5. Исключение из экономии батареи (Doze mode)
-    print("\n[4/4] Исключение из энергосбережения батареи (фоновая работа)...")
-    run_cmd(f"adb -s {serial} shell dumpsys deviceidle whitelist +{PACKAGE_NAME}")
-    print(f"    [OK] Добавлен в deviceidle whitelist!")
+        if tether_ip:
+            print(f"\n[+] USB-модем активен! Прямой IP: {tether_ip}")
+            print("[*] Переключаю ADB на защищённый сетевой канал...")
+            run_cmd(f"adb -s {serial} tcpip 5555")
+            time.sleep(2)
+            tcp_target = f"{tether_ip}:5555"
+            conn_out, _, _ = run_cmd(f"adb connect {tcp_target}")
+            if "connected" in conn_out:
+                print(f"[OK] Подключено к {tcp_target}! Повторно применяю настройки...")
+                apply_device_settings(tcp_target)
+                run_cmd(f"adb disconnect {tcp_target}")
+                print("[OK] Настройки успешно применены через канал USB-модема!")
+            else:
+                print(f"[!] Не удалось подключиться к {tcp_target}: {conn_out}")
+        else:
+            print("\n[!] Время ожидания USB-модема истекло.")
+            print("    Выдайте права вручную в настройках телефона или включите «Настройки безопасности» в меню разработчика.")
 
     print(f"\n{'='*60}")
     print(f"[+++] УСТРОЙСТВО {serial} ({brand} {model}) ПОЛНОСТЬЮ НАСТРОЕНО!")
+    print("[i] Для применения защиты от разлогина (сохранение Wi-Fi в авиарежиме)")
+    print("    рекомендуется перезагрузить телефон [adb reboot].")
     print(f"{'='*60}\n")
     return True
 

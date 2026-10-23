@@ -115,7 +115,7 @@
 3. Внизу в строке ввода команд вставьте **одну следующую строчку целиком**:
 
 ```bash
-cmd appops set --user 0 com.gadgets.auto RECEIVE_SENSITIVE_NOTIFICATIONS allow && cmd notification allow_listener com.gadgets.auto/com.gadgets.auto.util.network.NotificationService 0 && dumpsys deviceidle whitelist +com.gadgets.auto
+cmd appops set --user 0 com.gadgets.auto RECEIVE_SENSITIVE_NOTIFICATIONS allow && cmd notification allow_listener com.gadgets.auto/com.gadgets.auto.util.network.NotificationService 0 && dumpsys deviceidle whitelist +com.gadgets.auto && settings put global airplane_mode_radios cell,bluetooth,nfc,wimax && settings put global airplane_mode_toggleable_radios wifi,bluetooth
 ```
 
 4. Нажмите синюю круглую кнопку со стрелочкой (или **Enter** на клавиатуре) для запуска:
@@ -136,9 +136,9 @@ cmd appops set --user 0 com.gadgets.auto RECEIVE_SENSITIVE_NOTIFICATIONS allow &
 
 ---
 
-## ШАГ 6. Проверка результата
+## ШАГ 6. Проверка результата и перезагрузка
 
-Чтобы на 100% убедиться, что всё сработало, вставьте в aShell проверочную команду:
+1. Чтобы на 100% убедиться, что всё сработало, вставьте в aShell проверочную команду:
 
 ```bash
 cmd appops get --user 0 com.gadgets.auto RECEIVE_SENSITIVE_NOTIFICATIONS
@@ -149,6 +149,9 @@ cmd appops get --user 0 com.gadgets.auto RECEIVE_SENSITIVE_NOTIFICATIONS
 RECEIVE_SENSITIVE_NOTIFICATIONS: allow
 ```
 
+2. **Перезагрузите телефон** кнопкой питания, чтобы активировалась защита от отключения Wi-Fi в режиме полёта.
+
 ### 🎉 ВСЁ ГОТОВО!
-* Текст `allow` означает, что Android больше никогда не будет подменять пуши TBC Bank и других банков на «Защиту конфиденциальности».
-* Вы можете отключить «Беспроводную отладку» в настройках и закрыть Shizuku. Выданные разрешения намертво сохранены в памяти телефона и переживут любые перезагрузки устройства.
+* Текст `allow` означает, что Android больше никогда не будет подменять банковские пуши на заглушки.
+* Включение «Режима полёта» больше не вырубает Wi-Fi и защищает от случайного сброса сессии.
+* Вы можете отключить «Беспроводную отладку» в настройках. Все параметры сохранены намертво.

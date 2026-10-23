@@ -89,10 +89,64 @@ done
 echo -e "${GREEN}    [OK] Разрешения успешно выданы.${NC}"
 
 # 5. Whitelist battery optimization
-echo -e "${BLUE}[4/4] Исключение из энергосбережения батареи (фоновая работа)...${NC}"
+echo -e "${BLUE}[4/5] Исключение из энергосбережения батареи (фоновая работа)...${NC}"
 adb shell dumpsys deviceidle whitelist +"${PACKAGE_NAME}" >/dev/null 2>&1 || true
 echo -e "${GREEN}    [OK] Добавлено в белый список энергосбережения.${NC}"
 
+# 6. Airplane mode Wi-Fi protection
+echo -e "${BLUE}[5/5] Защита от разлогина: настройка режима полёта (Wi-Fi не гаснет)...${NC}"
+SET_OUT=$(adb shell settings put global airplane_mode_radios cell,bluetooth,nfc,wimax 2>&1 || true)
+adb shell settings put global airplane_mode_toggleable_radios wifi,bluetooth >/dev/null 2>&1 || true
+CHECK_RAD=$(adb shell settings get global airplane_mode_radios 2>/dev/null || echo "")
+
+if [[ "${SET_OUT}" == *"SecurityException"* ]] || [[ "${SET_OUT}" == *"Permission denial"* ]] || [[ "${CHECK_RAD}" == *"wifi"* ]]; then
+    echo -e "\n${YELLOW}============================================================${NC}"
+    echo -e "${YELLOW}[!] ВНИМАНИЕ: Сработала защита Xiaomi/HyperOS от изменений по USB.${NC}"
+    echo -e "    Для завершения настройки включите режим «USB-модем»:"
+    echo -e "    1. На телефоне смахните шторку уведомлений сверху вниз."
+    echo -e "    2. Нажмите на уведомление «Зарядка через USB» (Режим USB)."
+    echo -e "    3. Выберите пункт «USB-модем» (USB tethering)."
+    echo -e "${YELLOW}============================================================${NC}"
+    echo -e "[*] Ожидаю включения USB-модема на телефоне (до 60 секунд)..."
+
+    TETHER_IP=""
+    for i in {1..30}; do
+        sleep 2
+        IP_LINE=$(adb shell "ip -o -4 addr show" 2>/dev/null | grep -E "rndis|usb|eth" | head -n1 || true)
+        if [[ -n "${IP_LINE}" ]]; then
+            TETHER_IP=$(echo "${IP_LINE}" | awk '{print $4}' | cut -d/ -f1)
+            break
+        fi
+    done
+
+    if [[ -n "${TETHER_IP}" ]]; then
+        echo -e "${GREEN}[+] USB-модем активен! Прямой IP: ${TETHER_IP}${NC}"
+        echo -e "${BLUE}[*] Переключаю ADB на защищённый сетевой канал...${NC}"
+        adb tcpip 5555 >/dev/null 2>&1 || true
+        sleep 2
+        TCP_TARGET="${TETHER_IP}:5555"
+        if adb connect "${TCP_TARGET}" | grep -q "connected"; then
+            echo -e "${GREEN}[OK] Подключено к ${TCP_TARGET}! Повторно применяю настройки...${NC}"
+            adb -s "${TCP_TARGET}" shell cmd appops set --user 0 "${PACKAGE_NAME}" RECEIVE_SENSITIVE_NOTIFICATIONS allow >/dev/null 2>&1 || true
+            adb -s "${TCP_TARGET}" shell cmd notification allow_listener "${NOTIFICATION_SERVICE}" 0 >/dev/null 2>&1 || true
+            for perm in "${PERMS[@]}"; do
+                adb -s "${TCP_TARGET}" shell pm grant "${PACKAGE_NAME}" "${perm}" >/dev/null 2>&1 || true
+            done
+            adb -s "${TCP_TARGET}" shell dumpsys deviceidle whitelist +"${PACKAGE_NAME}" >/dev/null 2>&1 || true
+            adb -s "${TCP_TARGET}" shell settings put global airplane_mode_radios cell,bluetooth,nfc,wimax >/dev/null 2>&1 || true
+            adb -s "${TCP_TARGET}" shell settings put global airplane_mode_toggleable_radios wifi,bluetooth >/dev/null 2>&1 || true
+            adb disconnect "${TCP_TARGET}" >/dev/null 2>&1 || true
+            echo -e "${GREEN}[OK] Настройки успешно применены через канал USB-модема!${NC}"
+        fi
+    else
+        echo -e "${YELLOW}[!] Время ожидания USB-модема истекло. Завершите настройку вручную.${NC}"
+    fi
+else
+    echo -e "${GREEN}    [OK] airplane_mode_radios -> Wi-Fi защищён от отключения в авиарежиме!${NC}"
+fi
+
 echo -e "\n${GREEN}============================================================${NC}"
 echo -e "${GREEN}[+++] ТЕЛЕФОН ПОЛНОСТЬЮ НАСТРОЕН И ГОТОВ К РАБОТЕ!          ${NC}"
+echo -e "${BLUE}[i] Для применения защиты от разлогина (сохранение Wi-Fi в авиарежиме)${NC}"
+echo -e "${BLUE}    рекомендуется перезагрузить телефон: adb reboot${NC}"
 echo -e "${GREEN}============================================================${NC}\n"
