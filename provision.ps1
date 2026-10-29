@@ -257,7 +257,7 @@ function Provision-Device ($serial, $apkPath) {
         # Signature mismatch: удаляем старое и ставим заново
         if ($inst.Stdout -match "INSTALL_FAILED_UPDATE_INCOMPATIBLE" -or $inst.Stderr -match "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
             Write-Host "    [!] Конфликт подписей (signature mismatch) — удаляю старую версию..." -ForegroundColor Yellow
-            Exec-Cmd "adb -s $serial shell pm uninstall --user 0 $PackageName" | Out-Null
+            Exec-Cmd "adb -s $serial uninstall $PackageName" | Out-Null
             Start-Sleep -Seconds 1
             $inst = Invoke-AdbInstall $serial $apkPath
         }

@@ -59,7 +59,7 @@ if [ -f "${APK_FILE}" ]; then
 
     if echo "${INST_OUT}" | grep -q "INSTALL_FAILED_UPDATE_INCOMPATIBLE"; then
         echo -e "${YELLOW}    [!] Конфликт подписей (signature mismatch) — удаляю старую версию...${NC}"
-        adb shell pm uninstall --user 0 "${PACKAGE_NAME}" 2>/dev/null || true
+        adb uninstall "${PACKAGE_NAME}" 2>/dev/null || true
         sleep 1
         _do_install_sh "${APK_FILE}"
     fi

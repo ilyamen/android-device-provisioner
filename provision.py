@@ -177,7 +177,7 @@ def _install_apk(serial, apk_path):
     # Signature mismatch: уже стоит версия с другим ключом — сносим и ставим заново
     if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in out_inst or "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in err_inst:
         print("    [!] Обнаружен конфликт подписей (signature mismatch) — удаляю старую версию...")
-        run_cmd(f"adb -s {serial} shell pm uninstall --user 0 {PACKAGE_NAME}")
+        run_cmd(f"adb -s {serial} uninstall {PACKAGE_NAME}")
         time.sleep(1)
         out_inst, err_inst, code = _do_install(serial)
 
