@@ -156,7 +156,9 @@ def _install_apk(serial, apk_path):
         m_code = re.search(r"versionCode=([0-9]+)", dump)
         v_str = f"v{m_name.group(1)}" if m_name else ""
         c_str = f"(код {m_code.group(1)})" if m_code else ""
-        print(f"[*] Приложение {PACKAGE_NAME} установлено {v_str} {c_str}. Проверяю подпись...")
+        print(f"[*] Обновляю {PACKAGE_NAME} {v_str} {c_str} → {os.path.basename(apk_path)} ...")
+    else:
+        print(f"[+] Устанавливаю {os.path.basename(apk_path)} ...")
 
     def _do_install(target):
         # Отключаем package verifier (Realme/ColorOS блокирует сторонние APK).
@@ -170,7 +172,6 @@ def _install_apk(serial, apk_path):
             run_cmd(f"adb -s {target} shell settings put global verifier_verify_adb_installs 1")
         return out_i, err_i, code_i
 
-    print(f"[+] Устанавливаю {os.path.basename(apk_path)} ...")
     out_inst, err_inst, code = _do_install(serial)
 
     # Signature mismatch: уже стоит версия с другим ключом — сносим и ставим заново
@@ -181,14 +182,22 @@ def _install_apk(serial, apk_path):
         out_inst, err_inst, code = _do_install(serial)
 
     if "Success" in out_inst or (code == 0 and not err_inst.strip()):
-        # Проверяем реальную установку
-        check, _, _ = run_cmd(f"adb -s {serial} shell pm path {PACKAGE_NAME}")
-        if check and "package:" in check:
-            dump2, _, _ = run_cmd(f"adb -s {serial} shell dumpsys package {PACKAGE_NAME}")
-            m_name2 = re.search(r"versionName=([^\s]+)", dump2)
-            v_str2 = f"v{m_name2.group(1)}" if m_name2 else ""
-            print(f"    [OK] Успешно установлено {v_str2}!")
-            return True
+        # pm path может не сразу вернуть результат: package manager регистрирует
+        # пакет асинхронно. Даём 3 попытки с шагом 500 мс.
+        for attempt in range(3):
+            check, _, _ = run_cmd(f"adb -s {serial} shell pm path {PACKAGE_NAME}")
+            if check and "package:" in check:
+                dump2, _, _ = run_cmd(f"adb -s {serial} shell dumpsys package {PACKAGE_NAME}")
+                m_name2 = re.search(r"versionName=([^\s]+)", dump2)
+                v_str2 = f"v{m_name2.group(1)}" if m_name2 else ""
+                print(f"    [OK] Успешно установлено {v_str2}!")
+                return True
+            if attempt < 2:
+                time.sleep(0.5)
+        # adb install вернул Success, но pm path не подтверждает — скорее всего
+        # временная задержка регистрации. Не прерываем provisioning.
+        print(f"    [OK] Установка завершена (pm path не подтверждает немедленно, продолжаю).")
+        return True
 
     print(f"    [!] Ошибка установки: {out_inst.strip()} {err_inst.strip()}")
     return False

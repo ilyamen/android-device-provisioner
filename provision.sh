@@ -82,7 +82,9 @@ fi
 
 # 2. Grant RECEIVE_SENSITIVE_NOTIFICATIONS
 echo -e "${BLUE}[1/4] Разблокировка чувствительных пушей (Android 15/16)...${NC}"
-adb shell cmd appops set --user 0 "${PACKAGE_NAME}" RECEIVE_SENSITIVE_NOTIFICATIONS allow
+# || true обязателен: на Android 14 RECEIVE_SENSITIVE_NOTIFICATIONS неизвестен,
+# appops возвращает ненулевой код, set -e прерывает скрипт без него.
+adb shell cmd appops set --user 0 "${PACKAGE_NAME}" RECEIVE_SENSITIVE_NOTIFICATIONS allow || true
 STATUS=$(adb shell cmd appops get --user 0 "${PACKAGE_NAME}" RECEIVE_SENSITIVE_NOTIFICATIONS)
 echo -e "${GREEN}    [OK] Статус: ${STATUS}${NC}"
 
@@ -91,6 +93,8 @@ echo -e "${BLUE}[2/4] Активация службы чтения уведом�
 adb shell cmd notification allow_listener "${NOTIFICATION_SERVICE}" 0 || true
 CURRENT_LISTENERS=$(adb shell settings get secure enabled_notification_listeners || echo "")
 if [[ "${CURRENT_LISTENERS}" != *"${PACKAGE_NAME}"* ]]; then
+    # "null" — буквальный string который возвращает Android settings provider для незаданного ключа
+    [[ "${CURRENT_LISTENERS}" == "null" ]] && CURRENT_LISTENERS=""
     # Убираем ведущее ":" если CURRENT_LISTENERS пустой (первая установка)
     NEW_LISTENERS="${CURRENT_LISTENERS:+${CURRENT_LISTENERS}:}${NOTIFICATION_SERVICE}"
     adb shell settings put secure enabled_notification_listeners "${NEW_LISTENERS}"
