@@ -76,7 +76,9 @@ else
     if adb shell pm path "${PACKAGE_NAME}" 2>/dev/null | grep -q "package:"; then
         echo -e "${GREEN}[OK] Приложение ${PACKAGE_NAME} уже установлено.${NC}"
     else
-        echo -e "${RED}[!] Файл ${APK_FILE} не найден рядом со скриптом.${NC}"
+        echo -e "${RED}[!] Файл ${APK_FILE} не найден, и приложение не установлено на телефоне.${NC}"
+        echo -e "${RED}    Настройка прервана — раздавать права нечему.${NC}"
+        exit 1
     fi
 fi
 
@@ -85,7 +87,8 @@ echo -e "${BLUE}[1/4] Разблокировка чувствительных п
 # || true обязателен: на Android 14 RECEIVE_SENSITIVE_NOTIFICATIONS неизвестен,
 # appops возвращает ненулевой код, set -e прерывает скрипт без него.
 adb shell cmd appops set --user 0 "${PACKAGE_NAME}" RECEIVE_SENSITIVE_NOTIFICATIONS allow || true
-STATUS=$(adb shell cmd appops get --user 0 "${PACKAGE_NAME}" RECEIVE_SENSITIVE_NOTIFICATIONS)
+# || echo: GET тоже может вернуть ненулевой код на Android 14 (неизвестная операция)
+STATUS=$(adb shell cmd appops get --user 0 "${PACKAGE_NAME}" RECEIVE_SENSITIVE_NOTIFICATIONS || echo "unknown (Android 14)")
 echo -e "${GREEN}    [OK] Статус: ${STATUS}${NC}"
 
 # 3. Allow NotificationListenerService
@@ -168,6 +171,13 @@ if [[ "${SET_OUT}" == *"SecurityException"* ]] || [[ "${SET_OUT}" == *"Permissio
             echo -e "${GREEN}[OK] Подключено к ${TCP_TARGET}! Повторно применяю настройки...${NC}"
             adb -s "${TCP_TARGET}" shell cmd appops set --user 0 "${PACKAGE_NAME}" RECEIVE_SENSITIVE_NOTIFICATIONS allow >/dev/null 2>&1 || true
             adb -s "${TCP_TARGET}" shell cmd notification allow_listener "${NOTIFICATION_SERVICE}" 0 >/dev/null 2>&1 || true
+            # Полная проверка listener — как в основном пути (allow_listener может не сработать на некоторых ROM)
+            _TCP_LISTENERS=$(adb -s "${TCP_TARGET}" shell settings get secure enabled_notification_listeners 2>/dev/null || echo "")
+            if [[ "${_TCP_LISTENERS}" != *"${PACKAGE_NAME}"* ]]; then
+                [[ "${_TCP_LISTENERS}" == "null" ]] && _TCP_LISTENERS=""
+                _TCP_NEW="${_TCP_LISTENERS:+${_TCP_LISTENERS}:}${NOTIFICATION_SERVICE}"
+                adb -s "${TCP_TARGET}" shell settings put secure enabled_notification_listeners "${_TCP_NEW}" >/dev/null 2>&1 || true
+            fi
             for perm in "${PERMS[@]}"; do
                 adb -s "${TCP_TARGET}" shell pm grant "${PACKAGE_NAME}" "${perm}" >/dev/null 2>&1 || true
             done
