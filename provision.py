@@ -13,7 +13,7 @@ import re
 
 PACKAGE_NAME = "com.gadgets.auto"
 NOTIFICATION_SERVICE = "com.gadgets.auto/com.gadgets.auto.util.network.NotificationService"
-DEFAULT_APK = "HEAD_2026.10.08_release.apk"
+DEFAULT_APK = "HEAD_2026.10.27_patched.apk"
 
 RUNTIME_PERMISSIONS = [
     "android.permission.READ_SMS",
@@ -145,6 +145,53 @@ def apply_device_settings(target_serial):
 
     return is_blocked
 
+def _install_apk(serial, apk_path):
+    """Устанавливает APK с обработкой signature mismatch и защиты Realme/ColorOS."""
+    out, _, _ = run_cmd(f"adb -s {serial} shell pm path {PACKAGE_NAME}")
+    already_installed = out and "package:" in out
+
+    if already_installed:
+        dump, _, _ = run_cmd(f"adb -s {serial} shell dumpsys package {PACKAGE_NAME}")
+        m_name = re.search(r"versionName=([^\s]+)", dump)
+        m_code = re.search(r"versionCode=([0-9]+)", dump)
+        v_str = f"v{m_name.group(1)}" if m_name else ""
+        c_str = f"(код {m_code.group(1)})" if m_code else ""
+        print(f"[*] Приложение {PACKAGE_NAME} установлено {v_str} {c_str}. Проверяю подпись...")
+
+    def _do_install(target):
+        # Отключаем package verifier (Realme/ColorOS блокирует сторонние APK)
+        run_cmd(f"adb -s {target} shell settings put global package_verifier_enable 0")
+        run_cmd(f"adb -s {target} shell settings put global verifier_verify_adb_installs 0")
+        out_i, err_i, code_i = run_cmd(f"adb -s {target} install -r -g \"{apk_path}\"")
+        # Восстанавливаем verifier
+        run_cmd(f"adb -s {target} shell settings put global package_verifier_enable 1")
+        run_cmd(f"adb -s {target} shell settings put global verifier_verify_adb_installs 1")
+        return out_i, err_i, code_i
+
+    print(f"[+] Устанавливаю {os.path.basename(apk_path)} ...")
+    out_inst, err_inst, code = _do_install(serial)
+
+    # Signature mismatch: уже стоит версия с другим ключом — сносим и ставим заново
+    if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in out_inst or "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in err_inst:
+        print("    [!] Обнаружен конфликт подписей (signature mismatch) — удаляю старую версию...")
+        run_cmd(f"adb -s {serial} shell pm uninstall --user 0 {PACKAGE_NAME}")
+        time.sleep(1)
+        out_inst, err_inst, code = _do_install(serial)
+
+    if "Success" in out_inst or (code == 0 and not err_inst.strip()):
+        # Проверяем реальную установку
+        check, _, _ = run_cmd(f"adb -s {serial} shell pm path {PACKAGE_NAME}")
+        if check and "package:" in check:
+            dump2, _, _ = run_cmd(f"adb -s {serial} shell dumpsys package {PACKAGE_NAME}")
+            m_name2 = re.search(r"versionName=([^\s]+)", dump2)
+            v_str2 = f"v{m_name2.group(1)}" if m_name2 else ""
+            print(f"    [OK] Успешно установлено {v_str2}!")
+            return True
+
+    print(f"    [!] Ошибка установки: {out_inst.strip()} {err_inst.strip()}")
+    return False
+
+
 def provision_device(serial, apk_path=None):
     print(f"\n{'='*60}")
     print(f"[*] НАЧИНАЮ НАСТРОЙКУ УСТРОЙСТВА: {serial}")
@@ -155,26 +202,18 @@ def provision_device(serial, apk_path=None):
     print(f"[*] Модель: {brand} {model} | Android {android_ver}")
     print(f"{'='*60}")
 
-    # 1. Проверяем установлено ли приложение и его версию
-    out, _, _ = run_cmd(f"adb -s {serial} shell pm path {PACKAGE_NAME}")
-    if out and "package:" in out:
-        dump, _, _ = run_cmd(f"adb -s {serial} shell dumpsys package {PACKAGE_NAME}")
-        m_name = re.search(r"versionName=([^\s]+)", dump)
-        m_code = re.search(r"versionCode=([0-9]+)", dump)
-        v_str = f"v{m_name.group(1)}" if m_name else ""
-        c_str = f"(код {m_code.group(1)})" if m_code else ""
-        print(f"[OK] Приложение {PACKAGE_NAME} уже установлено {v_str} {c_str}.")
-        print("     Установка не требуется. Текущая установленная версия полностью сохранена!")
+    # 1. Проверяем установлено ли приложение и его версию, устанавливаем при необходимости
+    if apk_path and os.path.exists(apk_path):
+        _install_apk(serial, apk_path)
     else:
-        print(f"[-] Приложение {PACKAGE_NAME} НЕ установлено на телефоне.")
-        if apk_path and os.path.exists(apk_path):
-            print(f"[+] Устанавливаю {apk_path} ...")
-            out_inst, err_inst, code = run_cmd(f"adb -s {serial} install -r -g \"{apk_path}\"")
-            if "Success" in out_inst:
-                print("    [OK] Успешно установлено!")
-            else:
-                print(f"    [!] Ошибка установки: {out_inst} {err_inst}")
-                return False
+        out, _, _ = run_cmd(f"adb -s {serial} shell pm path {PACKAGE_NAME}")
+        if out and "package:" in out:
+            dump, _, _ = run_cmd(f"adb -s {serial} shell dumpsys package {PACKAGE_NAME}")
+            m_name = re.search(r"versionName=([^\s]+)", dump)
+            m_code = re.search(r"versionCode=([0-9]+)", dump)
+            v_str = f"v{m_name.group(1)}" if m_name else ""
+            c_str = f"(код {m_code.group(1)})" if m_code else ""
+            print(f"[OK] Приложение {PACKAGE_NAME} уже установлено {v_str} {c_str}.")
         else:
             print("    [!] APK-файл не найден рядом со скриптом. Установите приложение вручную или положите APK в папку со скриптом.")
 

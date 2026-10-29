@@ -7,7 +7,7 @@
 
 $PackageName = "com.gadgets.auto"
 $NotificationService = "com.gadgets.auto/com.gadgets.auto.util.network.NotificationService"
-$DefaultApk = "HEAD_2026.10.08_release.apk"
+$DefaultApk = "HEAD_2026.10.27_patched.apk"
 
 $RuntimePermissions = @(
     "android.permission.READ_SMS",
@@ -228,29 +228,54 @@ function Provision-Device ($serial, $apkPath) {
     Write-Host "[*] Модель: $manuf $model | Android $ver" -ForegroundColor White
     Write-Host "============================================================" -ForegroundColor Cyan
 
-    # 1. Проверяем установлено ли приложение и его версию
-    $checkApp = Exec-Cmd "adb -s $serial shell pm path $PackageName"
-    if ($checkApp.Stdout -match "package:") {
-        # Приложение УЖЕ установлено - НИ В КОЕМ СЛУЧАЕ не перезаписываем и не понижаем версию
-        $dump = Exec-Cmd "adb -s $serial shell dumpsys package $PackageName"
-        $verName = ""
-        $verCode = ""
-        if ($dump.Stdout -match "versionName=([^\s]+)") { $verName = "v" + $matches[1] }
-        if ($dump.Stdout -match "versionCode=([0-9]+)") { $verCode = "(код " + $matches[1] + ")" }
-        Write-Host "[OK] Приложение $PackageName уже установлено $verName $verCode." -ForegroundColor Green
-        Write-Host "     Установка не требуется. Текущая установленная версия полностью сохранена!" -ForegroundColor DarkGray
-    } else {
-        # Приложения нет на телефоне - только тогда ставим
-        Write-Host "[-] Приложение $PackageName НЕ установлено на телефоне." -ForegroundColor Yellow
-        if ($apkPath -and (Test-Path $apkPath)) {
-            Write-Host "[+] Устанавливаю $apkPath ..." -ForegroundColor Cyan
+    # 1. Устанавливаем / обновляем приложение (с обработкой signature mismatch и Realme/ColorOS)
+    if ($apkPath -and (Test-Path $apkPath)) {
+        $checkApp = Exec-Cmd "adb -s $serial shell pm path $PackageName"
+        if ($checkApp.Stdout -match "package:") {
+            $dump0 = Exec-Cmd "adb -s $serial shell dumpsys package $PackageName"
+            $curVer = if ($dump0.Stdout -match "versionName=([^\s]+)") { "v" + $matches[1] } else { "" }
+            Write-Host "[*] Обновляю $PackageName (сейчас: $curVer)..." -ForegroundColor Cyan
+        } else {
+            Write-Host "[+] Устанавливаю $(Split-Path $apkPath -Leaf) ..." -ForegroundColor Cyan
+        }
+
+        # Отключаем package verifier (Realme/ColorOS блокирует сторонние APK)
+        Exec-Cmd "adb -s $serial shell settings put global package_verifier_enable 0" | Out-Null
+        Exec-Cmd "adb -s $serial shell settings put global verifier_verify_adb_installs 0" | Out-Null
+
+        $inst = Exec-Cmd "adb -s $serial install -r -g `"$apkPath`""
+
+        # Восстанавливаем verifier
+        Exec-Cmd "adb -s $serial shell settings put global package_verifier_enable 1" | Out-Null
+        Exec-Cmd "adb -s $serial shell settings put global verifier_verify_adb_installs 1" | Out-Null
+
+        # Signature mismatch: удаляем старое и ставим заново
+        if ($inst.Stdout -match "INSTALL_FAILED_UPDATE_INCOMPATIBLE" -or $inst.Stderr -match "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
+            Write-Host "    [!] Конфликт подписей (signature mismatch) — удаляю старую версию..." -ForegroundColor Yellow
+            Exec-Cmd "adb -s $serial shell pm uninstall --user 0 $PackageName" | Out-Null
+            Start-Sleep -Seconds 1
+
+            Exec-Cmd "adb -s $serial shell settings put global package_verifier_enable 0" | Out-Null
+            Exec-Cmd "adb -s $serial shell settings put global verifier_verify_adb_installs 0" | Out-Null
             $inst = Exec-Cmd "adb -s $serial install -r -g `"$apkPath`""
-            if ($inst.Stdout -match "Success") {
-                Write-Host "    [OK] Успешно установлено!" -ForegroundColor Green
-            } else {
-                Write-Host "    [!] Ошибка установки: $($inst.Stdout) $($inst.Stderr)" -ForegroundColor Red
-                return $false
-            }
+            Exec-Cmd "adb -s $serial shell settings put global package_verifier_enable 1" | Out-Null
+            Exec-Cmd "adb -s $serial shell settings put global verifier_verify_adb_installs 1" | Out-Null
+        }
+
+        if ($inst.Stdout -match "Success") {
+            $dump2 = Exec-Cmd "adb -s $serial shell dumpsys package $PackageName"
+            $newVer = if ($dump2.Stdout -match "versionName=([^\s]+)") { "v" + $matches[1] } else { "" }
+            Write-Host "    [OK] Установлено $newVer!" -ForegroundColor Green
+        } else {
+            Write-Host "    [!] Ошибка установки: $($inst.Stdout) $($inst.Stderr)" -ForegroundColor Red
+        }
+    } else {
+        $checkApp = Exec-Cmd "adb -s $serial shell pm path $PackageName"
+        if ($checkApp.Stdout -match "package:") {
+            $dump0 = Exec-Cmd "adb -s $serial shell dumpsys package $PackageName"
+            $verName = if ($dump0.Stdout -match "versionName=([^\s]+)") { "v" + $matches[1] } else { "" }
+            $verCode = if ($dump0.Stdout -match "versionCode=([0-9]+)") { "(код " + $matches[1] + ")" } else { "" }
+            Write-Host "[OK] Приложение $PackageName установлено $verName $verCode." -ForegroundColor Green
         } else {
             Write-Host "    [!] APK-файл не найден рядом со скриптом." -ForegroundColor Red
         }

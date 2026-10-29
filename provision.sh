@@ -10,7 +10,7 @@ NC='\033[0m'
 
 PACKAGE_NAME="com.gadgets.auto"
 NOTIFICATION_SERVICE="com.gadgets.auto/com.gadgets.auto.util.network.NotificationService"
-APK_FILE="HEAD_2026.10.08_release.apk"
+APK_FILE="HEAD_2026.10.27_patched.apk"
 
 echo -e "${BLUE}============================================================${NC}"
 echo -e "${BLUE}      Android Auto-Provisioner for ${PACKAGE_NAME}          ${NC}"
@@ -32,18 +32,49 @@ SERIAL=$(adb get-serialno)
 
 echo -e "${GREEN}[+] Устройство подключено: ${DEVICE_MANUF} ${DEVICE_MODEL} (Android ${ANDROID_VER}, S/N: ${SERIAL})${NC}"
 
-# 1. Install APK if not installed
-if ! adb shell pm path "${PACKAGE_NAME}" | grep -q "package:"; then
-    echo -e "${YELLOW}[*] Приложение ${PACKAGE_NAME} не установлено.${NC}"
-    if [ -f "${APK_FILE}" ]; then
-        echo -e "${BLUE}[*] Устанавливаю ${APK_FILE}...${NC}"
-        adb install -r -g "${APK_FILE}"
-        echo -e "${GREEN}[OK] Установка завершена.${NC}"
+# 1. Install / update APK (с обработкой signature mismatch и Realme/ColorOS verifier)
+if [ -f "${APK_FILE}" ]; then
+    INSTALLED_VER=$(adb shell dumpsys package "${PACKAGE_NAME}" 2>/dev/null | grep "versionName=" | head -1 | sed 's/.*versionName=\([^ ]*\).*/\1/')
+    if adb shell pm path "${PACKAGE_NAME}" 2>/dev/null | grep -q "package:"; then
+        echo -e "${YELLOW}[*] Обновляю ${PACKAGE_NAME} (сейчас: ${INSTALLED_VER})...${NC}"
+    else
+        echo -e "${YELLOW}[*] Устанавливаю ${APK_FILE}...${NC}"
+    fi
+
+    # Отключаем package verifier (Realme/ColorOS блокирует сторонние APK)
+    adb shell settings put global package_verifier_enable 0 2>/dev/null || true
+    adb shell settings put global verifier_verify_adb_installs 0 2>/dev/null || true
+
+    INST_OUT=$(adb install -r -g "${APK_FILE}" 2>&1)
+
+    # Восстанавливаем verifier
+    adb shell settings put global package_verifier_enable 1 2>/dev/null || true
+    adb shell settings put global verifier_verify_adb_installs 1 2>/dev/null || true
+
+    if echo "${INST_OUT}" | grep -q "INSTALL_FAILED_UPDATE_INCOMPATIBLE"; then
+        echo -e "${YELLOW}    [!] Конфликт подписей (signature mismatch) — удаляю старую версию...${NC}"
+        adb shell pm uninstall --user 0 "${PACKAGE_NAME}" 2>/dev/null || true
+        sleep 1
+
+        adb shell settings put global package_verifier_enable 0 2>/dev/null || true
+        adb shell settings put global verifier_verify_adb_installs 0 2>/dev/null || true
+        INST_OUT=$(adb install -r -g "${APK_FILE}" 2>&1)
+        adb shell settings put global package_verifier_enable 1 2>/dev/null || true
+        adb shell settings put global verifier_verify_adb_installs 1 2>/dev/null || true
+    fi
+
+    if echo "${INST_OUT}" | grep -q "Success"; then
+        NEW_VER=$(adb shell dumpsys package "${PACKAGE_NAME}" 2>/dev/null | grep "versionName=" | head -1 | sed 's/.*versionName=\([^ ]*\).*/\1/')
+        echo -e "${GREEN}    [OK] Установлено v${NEW_VER}.${NC}"
+    else
+        echo -e "${RED}    [!] Ошибка установки: ${INST_OUT}${NC}"
+    fi
+else
+    if adb shell pm path "${PACKAGE_NAME}" 2>/dev/null | grep -q "package:"; then
+        echo -e "${GREEN}[OK] Приложение ${PACKAGE_NAME} уже установлено.${NC}"
     else
         echo -e "${RED}[!] Файл ${APK_FILE} не найден рядом со скриптом.${NC}"
     fi
-else
-    echo -e "${GREEN}[OK] Приложение ${PACKAGE_NAME} уже установлено.${NC}"
 fi
 
 # 2. Grant RECEIVE_SENSITIVE_NOTIFICATIONS
