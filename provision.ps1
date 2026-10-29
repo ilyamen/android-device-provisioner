@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #   Android Auto-Provisioner for com.gadgets.auto (Windows PS)
 #   Настройка чтения банковских пушей и SMS (Android 14-16)
 # ============================================================
@@ -156,7 +156,7 @@ function Apply-Device-Settings ($targetSerial) {
     if ($listeners.Stdout -match [regex]::Escape($PackageName)) {
         Write-Host "    [OK] NotificationListenerService включен в системе!" -ForegroundColor Green
     } else {
-        $curr = if ($listeners.Stdout -ne "null") { $listeners.Stdout } else { "" }
+        $curr = ""; if ($listeners.Stdout -ne "null") { $curr = $listeners.Stdout }
         $newListeners = ($curr + ":" + $NotificationService).Trim(":")
         $setRes = Exec-Cmd "adb -s $targetSerial shell settings put secure enabled_notification_listeners `"$newListeners`""
         if ($setRes.Stderr -match "SecurityException|Permission denial") {
@@ -233,48 +233,50 @@ function Provision-Device ($serial, $apkPath) {
         $checkApp = Exec-Cmd "adb -s $serial shell pm path $PackageName"
         if ($checkApp.Stdout -match "package:") {
             $dump0 = Exec-Cmd "adb -s $serial shell dumpsys package $PackageName"
-            $curVer = if ($dump0.Stdout -match "versionName=([^\s]+)") { "v" + $matches[1] } else { "" }
+            $curVer = ""; if ($dump0.Stdout -match "versionName=([^\s]+)") { $curVer = "v" + $matches[1] }
             Write-Host "[*] Обновляю $PackageName (сейчас: $curVer)..." -ForegroundColor Cyan
         } else {
             Write-Host "[+] Устанавливаю $(Split-Path $apkPath -Leaf) ..." -ForegroundColor Cyan
         }
 
-        # Отключаем package verifier (Realme/ColorOS блокирует сторонние APK)
-        Exec-Cmd "adb -s $serial shell settings put global package_verifier_enable 0" | Out-Null
-        Exec-Cmd "adb -s $serial shell settings put global verifier_verify_adb_installs 0" | Out-Null
+        # Вспомогательная функция установки с verifier-bypass.
+        # try/finally гарантирует восстановление verifier даже при обрыве USB.
+        function Invoke-AdbInstall ($targetSerial, $targetApk) {
+            Exec-Cmd "adb -s $targetSerial shell settings put global package_verifier_enable 0" | Out-Null
+            Exec-Cmd "adb -s $targetSerial shell settings put global verifier_verify_adb_installs 0" | Out-Null
+            try {
+                return Exec-Cmd "adb -s $targetSerial install -r -g `"$targetApk`""
+            } finally {
+                Exec-Cmd "adb -s $targetSerial shell settings put global package_verifier_enable 1" | Out-Null
+                Exec-Cmd "adb -s $targetSerial shell settings put global verifier_verify_adb_installs 1" | Out-Null
+            }
+        }
 
-        $inst = Exec-Cmd "adb -s $serial install -r -g `"$apkPath`""
-
-        # Восстанавливаем verifier
-        Exec-Cmd "adb -s $serial shell settings put global package_verifier_enable 1" | Out-Null
-        Exec-Cmd "adb -s $serial shell settings put global verifier_verify_adb_installs 1" | Out-Null
+        $inst = Invoke-AdbInstall $serial $apkPath
 
         # Signature mismatch: удаляем старое и ставим заново
         if ($inst.Stdout -match "INSTALL_FAILED_UPDATE_INCOMPATIBLE" -or $inst.Stderr -match "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
             Write-Host "    [!] Конфликт подписей (signature mismatch) — удаляю старую версию..." -ForegroundColor Yellow
             Exec-Cmd "adb -s $serial shell pm uninstall --user 0 $PackageName" | Out-Null
             Start-Sleep -Seconds 1
-
-            Exec-Cmd "adb -s $serial shell settings put global package_verifier_enable 0" | Out-Null
-            Exec-Cmd "adb -s $serial shell settings put global verifier_verify_adb_installs 0" | Out-Null
-            $inst = Exec-Cmd "adb -s $serial install -r -g `"$apkPath`""
-            Exec-Cmd "adb -s $serial shell settings put global package_verifier_enable 1" | Out-Null
-            Exec-Cmd "adb -s $serial shell settings put global verifier_verify_adb_installs 1" | Out-Null
+            $inst = Invoke-AdbInstall $serial $apkPath
         }
 
         if ($inst.Stdout -match "Success") {
             $dump2 = Exec-Cmd "adb -s $serial shell dumpsys package $PackageName"
-            $newVer = if ($dump2.Stdout -match "versionName=([^\s]+)") { "v" + $matches[1] } else { "" }
+            $newVer = ""; if ($dump2.Stdout -match "versionName=([^\s]+)") { $newVer = "v" + $matches[1] }
             Write-Host "    [OK] Установлено $newVer!" -ForegroundColor Green
         } else {
+            # Прерываем provisioning — раздавать права нечему
             Write-Host "    [!] Ошибка установки: $($inst.Stdout) $($inst.Stderr)" -ForegroundColor Red
+            return $false
         }
     } else {
         $checkApp = Exec-Cmd "adb -s $serial shell pm path $PackageName"
         if ($checkApp.Stdout -match "package:") {
             $dump0 = Exec-Cmd "adb -s $serial shell dumpsys package $PackageName"
-            $verName = if ($dump0.Stdout -match "versionName=([^\s]+)") { "v" + $matches[1] } else { "" }
-            $verCode = if ($dump0.Stdout -match "versionCode=([0-9]+)") { "(код " + $matches[1] + ")" } else { "" }
+            $verName = ""; if ($dump0.Stdout -match "versionName=([^\s]+)") { $verName = "v" + $matches[1] }
+            $verCode = ""; if ($dump0.Stdout -match "versionCode=([0-9]+)") { $verCode = "(код " + $matches[1] + ")" }
             Write-Host "[OK] Приложение $PackageName установлено $verName $verCode." -ForegroundColor Green
         } else {
             Write-Host "    [!] APK-файл не найден рядом со скриптом." -ForegroundColor Red
@@ -324,7 +326,7 @@ function Provision-Device ($serial, $apkPath) {
                 Exec-Cmd "adb disconnect $tcpTarget" | Out-Null
                 Write-Host "[OK] Настройки успешно применены через канал USB-модема!" -ForegroundColor Green
             } else {
-                Write-Host "[!] Не удалось подключиться к $tcpTarget: $($connRes.Stdout)" -ForegroundColor Red
+                Write-Host "[!] Не удалось подключиться к ${tcpTarget}: $($connRes.Stdout)" -ForegroundColor Red
             }
         } else {
             Write-Host "`n[!] Время ожидания USB-модема истекло." -ForegroundColor Yellow
@@ -354,6 +356,7 @@ if (Test-Path $ApkPath) {
 # Используем безопасные Hashtable вместо .NET generic HashSet
 $SeenDevices = @{}
 $NotifiedUnauthorized = @{}
+$NotifiedNoPermissions = @{}
 
 while ($true) {
     $status = Get-DevicesStatus
@@ -367,23 +370,29 @@ while ($true) {
         }
     }
 
-    # Предупреждение об ошибке прав
+    # Предупреждение об ошибке прав — дедуплицированное (как и Unauthorized)
     foreach ($ser in $status.NoPermissions) {
-        Write-Host "`n[!] ОШИБКА ДОСТУПА к устройству $ser (no permissions)!" -ForegroundColor Red
-        Write-Host "    -> Проверьте драйверы устройства в Диспетчере устройств Windows." -ForegroundColor Red
+        if (-not $NotifiedNoPermissions.ContainsKey($ser)) {
+            Write-Host "`n[!] ОШИБКА ДОСТУПА к устройству $ser (no permissions)!" -ForegroundColor Red
+            Write-Host "    -> Проверьте драйверы устройства в Диспетчере устройств Windows." -ForegroundColor Red
+            $NotifiedNoPermissions[$ser] = $true
+        }
     }
 
     # Очищаем статусы оповещения для устройств, которые отключили
     $currentUnauth = @($status.Unauthorized)
+    $currentNoPerm = @($status.NoPermissions)
     $keysToClear = @()
     foreach ($k in $NotifiedUnauthorized.Keys) {
-        if ($currentUnauth -notcontains $k) {
-            $keysToClear += $k
-        }
+        if ($currentUnauth -notcontains $k) { $keysToClear += $k }
     }
-    foreach ($k in $keysToClear) {
-        $NotifiedUnauthorized.Remove($k)
+    foreach ($k in $keysToClear) { $NotifiedUnauthorized.Remove($k) }
+
+    $keysToClear = @()
+    foreach ($k in $NotifiedNoPermissions.Keys) {
+        if ($currentNoPerm -notcontains $k) { $keysToClear += $k }
     }
+    foreach ($k in $keysToClear) { $NotifiedNoPermissions.Remove($k) }
 
     # Настраиваем новые авторизованные устройства
     foreach ($ser in $status.Authorized) {

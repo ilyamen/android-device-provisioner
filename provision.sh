@@ -32,35 +32,36 @@ SERIAL=$(adb get-serialno)
 
 echo -e "${GREEN}[+] Устройство подключено: ${DEVICE_MANUF} ${DEVICE_MODEL} (Android ${ANDROID_VER}, S/N: ${SERIAL})${NC}"
 
+# Вспомогательная функция установки с verifier-bypass.
+# set -e активен, поэтому явно захватываем код выхода через || true.
+_do_install_sh() {
+    local target_apk="$1"
+    adb shell settings put global package_verifier_enable 0 2>/dev/null || true
+    adb shell settings put global verifier_verify_adb_installs 0 2>/dev/null || true
+    # || true обязателен: без него set -e прерывает скрипт при ненулевом exit-коде adb install,
+    # и INST_OUT никогда не попадёт в блок проверки INSTALL_FAILED_*.
+    INST_OUT=$(adb install -r -g "${target_apk}" 2>&1) || true
+    adb shell settings put global package_verifier_enable 1 2>/dev/null || true
+    adb shell settings put global verifier_verify_adb_installs 1 2>/dev/null || true
+}
+
 # 1. Install / update APK (с обработкой signature mismatch и Realme/ColorOS verifier)
 if [ -f "${APK_FILE}" ]; then
-    INSTALLED_VER=$(adb shell dumpsys package "${PACKAGE_NAME}" 2>/dev/null | grep "versionName=" | head -1 | sed 's/.*versionName=\([^ ]*\).*/\1/')
+    # Сначала проверяем наличие пакета, потом запрашиваем версию (избегаем лишнего adb-вызова)
     if adb shell pm path "${PACKAGE_NAME}" 2>/dev/null | grep -q "package:"; then
+        INSTALLED_VER=$(adb shell dumpsys package "${PACKAGE_NAME}" 2>/dev/null | grep "versionName=" | head -1 | sed 's/.*versionName=\([^ ]*\).*/\1/')
         echo -e "${YELLOW}[*] Обновляю ${PACKAGE_NAME} (сейчас: ${INSTALLED_VER})...${NC}"
     else
         echo -e "${YELLOW}[*] Устанавливаю ${APK_FILE}...${NC}"
     fi
 
-    # Отключаем package verifier (Realme/ColorOS блокирует сторонние APK)
-    adb shell settings put global package_verifier_enable 0 2>/dev/null || true
-    adb shell settings put global verifier_verify_adb_installs 0 2>/dev/null || true
-
-    INST_OUT=$(adb install -r -g "${APK_FILE}" 2>&1)
-
-    # Восстанавливаем verifier
-    adb shell settings put global package_verifier_enable 1 2>/dev/null || true
-    adb shell settings put global verifier_verify_adb_installs 1 2>/dev/null || true
+    _do_install_sh "${APK_FILE}"
 
     if echo "${INST_OUT}" | grep -q "INSTALL_FAILED_UPDATE_INCOMPATIBLE"; then
         echo -e "${YELLOW}    [!] Конфликт подписей (signature mismatch) — удаляю старую версию...${NC}"
         adb shell pm uninstall --user 0 "${PACKAGE_NAME}" 2>/dev/null || true
         sleep 1
-
-        adb shell settings put global package_verifier_enable 0 2>/dev/null || true
-        adb shell settings put global verifier_verify_adb_installs 0 2>/dev/null || true
-        INST_OUT=$(adb install -r -g "${APK_FILE}" 2>&1)
-        adb shell settings put global package_verifier_enable 1 2>/dev/null || true
-        adb shell settings put global verifier_verify_adb_installs 1 2>/dev/null || true
+        _do_install_sh "${APK_FILE}"
     fi
 
     if echo "${INST_OUT}" | grep -q "Success"; then
@@ -68,6 +69,8 @@ if [ -f "${APK_FILE}" ]; then
         echo -e "${GREEN}    [OK] Установлено v${NEW_VER}.${NC}"
     else
         echo -e "${RED}    [!] Ошибка установки: ${INST_OUT}${NC}"
+        echo -e "${RED}    [!] Настройка прервана — приложение не установлено.${NC}"
+        exit 1
     fi
 else
     if adb shell pm path "${PACKAGE_NAME}" 2>/dev/null | grep -q "package:"; then
@@ -88,7 +91,8 @@ echo -e "${BLUE}[2/4] Активация службы чтения уведом�
 adb shell cmd notification allow_listener "${NOTIFICATION_SERVICE}" 0 || true
 CURRENT_LISTENERS=$(adb shell settings get secure enabled_notification_listeners || echo "")
 if [[ "${CURRENT_LISTENERS}" != *"${PACKAGE_NAME}"* ]]; then
-    NEW_LISTENERS="${CURRENT_LISTENERS}:${NOTIFICATION_SERVICE}"
+    # Убираем ведущее ":" если CURRENT_LISTENERS пустой (первая установка)
+    NEW_LISTENERS="${CURRENT_LISTENERS:+${CURRENT_LISTENERS}:}${NOTIFICATION_SERVICE}"
     adb shell settings put secure enabled_notification_listeners "${NEW_LISTENERS}"
 fi
 echo -e "${GREEN}    [OK] Notification Listener активирован.${NC}"

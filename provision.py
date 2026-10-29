@@ -159,13 +159,15 @@ def _install_apk(serial, apk_path):
         print(f"[*] Приложение {PACKAGE_NAME} установлено {v_str} {c_str}. Проверяю подпись...")
 
     def _do_install(target):
-        # Отключаем package verifier (Realme/ColorOS блокирует сторонние APK)
+        # Отключаем package verifier (Realme/ColorOS блокирует сторонние APK).
+        # try/finally гарантирует восстановление verifier даже при обрыве USB во время adb install.
         run_cmd(f"adb -s {target} shell settings put global package_verifier_enable 0")
         run_cmd(f"adb -s {target} shell settings put global verifier_verify_adb_installs 0")
-        out_i, err_i, code_i = run_cmd(f"adb -s {target} install -r -g \"{apk_path}\"")
-        # Восстанавливаем verifier
-        run_cmd(f"adb -s {target} shell settings put global package_verifier_enable 1")
-        run_cmd(f"adb -s {target} shell settings put global verifier_verify_adb_installs 1")
+        try:
+            out_i, err_i, code_i = run_cmd(f"adb -s {target} install -r -g \"{apk_path}\"")
+        finally:
+            run_cmd(f"adb -s {target} shell settings put global package_verifier_enable 1")
+            run_cmd(f"adb -s {target} shell settings put global verifier_verify_adb_installs 1")
         return out_i, err_i, code_i
 
     print(f"[+] Устанавливаю {os.path.basename(apk_path)} ...")
@@ -204,7 +206,9 @@ def provision_device(serial, apk_path=None):
 
     # 1. Проверяем установлено ли приложение и его версию, устанавливаем при необходимости
     if apk_path and os.path.exists(apk_path):
-        _install_apk(serial, apk_path)
+        # Прерываем provisioning если установка провалилась — раздавать права нечему
+        if not _install_apk(serial, apk_path):
+            return False
     else:
         out, _, _ = run_cmd(f"adb -s {serial} shell pm path {PACKAGE_NAME}")
         if out and "package:" in out:
