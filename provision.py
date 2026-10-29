@@ -166,7 +166,7 @@ def _install_apk(serial, apk_path):
         run_cmd(f"adb -s {target} shell settings put global package_verifier_enable 0")
         run_cmd(f"adb -s {target} shell settings put global verifier_verify_adb_installs 0")
         try:
-            out_i, err_i, code_i = run_cmd(f"adb -s {target} install -r -g \"{apk_path}\"")
+            out_i, err_i, code_i = run_cmd(f"adb -s {target} install -r \"{apk_path}\"")
         finally:
             run_cmd(f"adb -s {target} shell settings put global package_verifier_enable 1")
             run_cmd(f"adb -s {target} shell settings put global verifier_verify_adb_installs 1")

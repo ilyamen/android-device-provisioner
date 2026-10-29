@@ -245,7 +245,7 @@ function Provision-Device ($serial, $apkPath) {
             Exec-Cmd "adb -s $targetSerial shell settings put global package_verifier_enable 0" | Out-Null
             Exec-Cmd "adb -s $targetSerial shell settings put global verifier_verify_adb_installs 0" | Out-Null
             try {
-                return Exec-Cmd "adb -s $targetSerial install -r -g `"$targetApk`""
+                return Exec-Cmd "adb -s $targetSerial install -r `"$targetApk`""
             } finally {
                 Exec-Cmd "adb -s $targetSerial shell settings put global package_verifier_enable 1" | Out-Null
                 Exec-Cmd "adb -s $targetSerial shell settings put global verifier_verify_adb_installs 1" | Out-Null

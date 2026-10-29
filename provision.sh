@@ -40,7 +40,7 @@ _do_install_sh() {
     adb shell settings put global verifier_verify_adb_installs 0 2>/dev/null || true
     # || true обязателен: без него set -e прерывает скрипт при ненулевом exit-коде adb install,
     # и INST_OUT никогда не попадёт в блок проверки INSTALL_FAILED_*.
-    INST_OUT=$(adb install -r -g "${target_apk}" 2>&1) || true
+    INST_OUT=$(adb install -r "${target_apk}" 2>&1) || true
     adb shell settings put global package_verifier_enable 1 2>/dev/null || true
     adb shell settings put global verifier_verify_adb_installs 1 2>/dev/null || true
 }
