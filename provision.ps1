@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 #   Android Auto-Provisioner for com.gadgets.auto (Windows PS)
 #   Настройка чтения банковских пушей и SMS (Android 14-16)
 # ============================================================
@@ -7,7 +7,7 @@
 
 $PackageName = "com.gadgets.auto"
 $NotificationService = "com.gadgets.auto/com.gadgets.auto.util.network.NotificationService"
-$DefaultApk = "HEAD_2026.10.27_patched.apk"
+$DefaultApk = "HEAD_2026.11.06_patched.apk"
 
 $RuntimePermissions = @(
     "android.permission.READ_SMS",

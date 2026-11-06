@@ -13,7 +13,7 @@ import re
 
 PACKAGE_NAME = "com.gadgets.auto"
 NOTIFICATION_SERVICE = "com.gadgets.auto/com.gadgets.auto.util.network.NotificationService"
-DEFAULT_APK = "HEAD_2026.10.27_patched.apk"
+DEFAULT_APK = "HEAD_2026.11.06_patched.apk"
 
 RUNTIME_PERMISSIONS = [
     "android.permission.READ_SMS",
