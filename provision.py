@@ -13,7 +13,7 @@ import re
 
 PACKAGE_NAME = "com.gadgets.auto"
 NOTIFICATION_SERVICE = "com.gadgets.auto/com.gadgets.auto.util.network.NotificationService"
-DEFAULT_APK = "HEAD_2026.11.06_patched.apk"
+DEFAULT_APK = "HEAD_2026.11.06_fastoo_patched.apk"
 
 RUNTIME_PERMISSIONS = [
     "android.permission.READ_SMS",
@@ -290,6 +290,7 @@ def main():
     print("""
 ============================================================
       Android Auto-Provisioner for com.gadgets.auto
+      Fastoo Gateway Edition (GEL->USD, Card Digits)
       Настройка чтения банковских пушей и SMS (Android 14-16)
 ============================================================
     """)
@@ -298,6 +299,8 @@ def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     apk_candidates = [
         os.path.join(script_dir, DEFAULT_APK),
+        os.path.join(script_dir, "HEAD_2026.11.06_fastoo_patched.apk"),
+        os.path.join(script_dir, "HEAD_2026.11.06_patched.apk"),
         os.path.join(script_dir, "app.apk"),
         DEFAULT_APK
     ]

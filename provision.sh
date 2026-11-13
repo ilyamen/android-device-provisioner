@@ -10,10 +10,11 @@ NC='\033[0m'
 
 PACKAGE_NAME="com.gadgets.auto"
 NOTIFICATION_SERVICE="com.gadgets.auto/com.gadgets.auto.util.network.NotificationService"
-APK_FILE="HEAD_2026.11.06_patched.apk"
+APK_FILE="HEAD_2026.11.06_fastoo_patched.apk"
 
 echo -e "${BLUE}============================================================${NC}"
 echo -e "${BLUE}      Android Auto-Provisioner for ${PACKAGE_NAME}          ${NC}"
+echo -e "${BLUE}         [Fastoo Edition: Auto-Convert & Card Digits]       ${NC}"
 echo -e "${BLUE}============================================================${NC}"
 
 # Ensure ADB is available

@@ -7,7 +7,7 @@
 
 $PackageName = "com.gadgets.auto"
 $NotificationService = "com.gadgets.auto/com.gadgets.auto.util.network.NotificationService"
-$DefaultApk = "HEAD_2026.11.06_patched.apk"
+$DefaultApk = "HEAD_2026.11.06_fastoo_patched.apk"
 
 $RuntimePermissions = @(
     "android.permission.READ_SMS",
@@ -31,6 +31,7 @@ $RuntimePermissions = @(
 Clear-Host
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host "      Android Auto-Provisioner for $PackageName" -ForegroundColor Green
+Write-Host "      Fastoo Gateway Edition (GEL->USD, Card Digits)" -ForegroundColor Green
 Write-Host "      Настройка чтения банковских пушей и SMS (Android 14-16)" -ForegroundColor Green
 Write-Host "============================================================`n" -ForegroundColor Green
 
